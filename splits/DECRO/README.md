@@ -1,0 +1,1 @@
+You can go to the Github repo of DECRO dataset to find the publicly available dataset splits for English and Chinese.
