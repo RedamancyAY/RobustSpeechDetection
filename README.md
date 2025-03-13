@@ -1,5 +1,3 @@
-
-
 # RobustSpeechDetection
 
 This repository contains the code for the paper ["Robust AI-Synthesized Speech Detection Using Feature Decomposition Learning and Synthesizer Feature Augmentation"](https://ieeexplore.ieee.org/abstract/document/10806877).
