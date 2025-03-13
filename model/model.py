@@ -85,7 +85,7 @@ class AudioModel(nn.Module):
             self.feature_model = ResNet()
             final_dim = 512
         elif feature_extractor.lower() == "transformer":
-            self.feature_model = TransformerBaseLine()
+            self.feature_model = TransformerBaseLine(pretrain_model_path=cfg.pretrain_transformer_path)
             final_dim = 768
         else:
             raise ValueError(
@@ -278,23 +278,6 @@ class AudioModel(nn.Module):
 
         return res
 
-
-# + tags=["style-activity", "active-ipynb"] editable=true slideshow={"slide_type": ""}
-# model = AudioModel(vocoder_classes=7)
-# x = torch.randn(32, 1, 48000)
-# _ = model(x)
-
-# + tags=["active-ipynb"]
-# # ckpt = torch.load(
-# #     "/home/ay/data/DATA/1-model_save/0-Audio/Ours/LibriSeVoc_cross_dataset/version_7/checkpoints/best-epoch=3-val-auc=0.99.ckpt"
-# # )
-#
-# # state_dict = ckpt["state_dict"]
-#
-# # state_dict2 = {key.replace("model.", "", 1): state_dict[key] for key in state_dict}
-#
-# # model.load_state_dict(state_dict2)
-# -
 
 def get_permutationID_by_label(label):
     x = label.cpu()

@@ -16,12 +16,17 @@
 # +
 import math
 import numbers
-from typing import Optional
+import random
+import warnings
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
 import torchaudio
-
+import torchaudio.transforms as T
+from hide_warnings import hide_warnings
+from torchaudio.io import AudioEffector
 
 # -
 
@@ -270,7 +275,253 @@ class SpecAugmentBatchTransform(SpecAugmentTransform):
 
         return spectrogram
 
-# +
-# module = SpecAugmentBatchTransform.from_policy('ld')
-# spectrogram = torch.rand(2, 1, 257, 128)
-# module(spectrogram)
+
+# %%
+# %load_ext autoreload
+# %autoreload 2
+
+# %%
+
+
+
+class Torchaudio_resampler:
+    def __init__(self):
+        self.transforms = {}
+
+    def function_resample(self, x, orig_freq, new_freq):
+        x = torchaudio.functional.resample(
+            x,
+            orig_freq=orig_freq,
+            new_freq=new_freq,
+            resampling_method="sinc_interp_kaiser",
+        )
+        return x
+
+    def transform_resample(self, x, orig_freq, new_freq):
+        key = f"{orig_freq}-{new_freq}"
+        if key not in self.transforms.keys():
+            self.transforms[key] = T.Resample(
+                orig_freq,
+                new_freq,
+                resampling_method="sinc_interp_kaiser",
+            )
+
+        x = self.transforms[key](x)
+        return x
+    
+def _source_target_sample_rate(orig_freq: int, speed: float):
+    source_sample_rate = int(speed * orig_freq)
+    target_sample_rate = int(orig_freq)
+    gcd = math.gcd(source_sample_rate, target_sample_rate)
+    return source_sample_rate // gcd, target_sample_rate // gcd
+
+@dataclass
+class RandomSpeed:
+    min_speed: float = 0.5
+    max_speed: float = 2.0
+    p: float = 0.5
+
+    def __post_init__(self):
+        """post initialization
+
+        check the values of the min_speed and max_speed
+
+        """
+        if self.min_speed <= 0:
+            raise ValueError(
+                f"Error, min speed must be > 0, your input is {self.min_speed}"
+            )
+        if self.min_speed > self.max_speed:
+            raise ValueError(
+                f"Error, min_speed must < max_speed, your input is {self.min_speed} and {self.max_speed}"
+            )
+
+        self.speed_to_label = {
+            x / 10: x - int(self.min_speed * 10)
+            for x in range(int(self.min_speed * 10), int(self.max_speed * 10) + 1, 1)
+        }
+
+        self.resampler = Torchaudio_resampler()
+
+    def _random_speed(self, x, speed):
+        if speed == 1.0:
+            return x
+        else:
+            orig_freq, new_freq = _source_target_sample_rate(16000, speed)
+
+            # x, _ = speed_transform(x, 16000, speed)
+            if isinstance(x, np.ndarray):
+                x = librosa_resample(x, orig_freq, new_freq)
+            elif isinstance(x, torch.Tensor):
+                x = self.resampler.function_resample(x, orig_freq, new_freq)
+                # x = self.resampler.transform_resample(x, orig_freq, new_freq)
+            else:
+                raise ValueError(
+                    f"Error, the input audio is not np.ndarray or torch.Tensor, but is {type(x)}"
+                )
+
+            return x
+
+    def get_random_speed(self):
+        if np.random.rand() > self.p:
+            target_speed = 1.0
+        else:
+            target_speed = np.random.rand() * (self.max_speed - self.min_speed) + self.min_speed
+            target_speed = round(target_speed, 1)
+        return target_speed
+
+    def set_speed_label(self, target_speed, metadata):
+        metadata["speed_label"] = self.speed_to_label[target_speed]
+        metadata["speed"] = target_speed
+        return metadata
+
+    def __call__(self, x: torch.Tensor, metadata=None, **kwargs) -> torch.Tensor:
+        if x.ndim not in [1, 2]:
+            raise ValueError("Error, input audio should be (L), or (C, L)", x.shape)
+
+        if np.random.rand() > self.p:
+            target_speed = 1.0
+        else:
+            target_speed = (
+                np.random.rand() * (self.max_speed - self.min_speed) + self.min_speed
+            )
+            target_speed = round(target_speed, 1)
+        if metadata is not None:
+            metadata["speed_label"] = self.speed_to_label[target_speed]
+            metadata["speed"] = target_speed
+        x = self._random_speed(x, target_speed)
+        # print(target_speed, x.shape, self.speed_to_label[target_speed])
+        return x
+
+    def batch_apply(self, x: torch.Tensor):
+        batch_size = x.shape[0]
+        labels = [self.get_random_speed() for i in range(batch_size)]
+        for i, speed in enumerate(labels):
+            x[i] = self._random_speed(x[i], speed)
+        return x, labels
+    
+    
+@dataclass
+class RandomAudioCompression:
+    def __init__(self, p=0.5, sample_rate=16000):
+        """post initialization
+
+        check the values of the min_speed and max_speed
+
+        """
+
+        self.sample_rate = sample_rate
+        self.bit_rate = [16000, 32000, 64000]
+        self.format_codec = {
+            "mp4": "aac",
+            "ogg": "opus",
+            "mp3": "mp3",
+        }
+        self.p = p
+
+        self.effectors = {}
+        for _format, _codec in self.format_codec.items():
+            for bit_rate in self.bit_rate:
+                key = self.get_setting_name(_codec, bit_rate)
+                _codec = None if _codec == 'mp3' else _codec
+                self.effectors[key] = AudioEffector(
+                    format=_format,
+                    encoder=_codec,
+                    codec_config=torchaudio.io.CodecConfig(bit_rate=bit_rate),
+                )
+
+        self.setting_to_label = {
+            key: i + 1 for i, key in enumerate(self.effectors.keys())
+        }
+        self.setting_to_label["None"] = 0
+
+    def get_setting_name(self, codec, bit_rate):
+        key = f"{codec}_{bit_rate}"
+        return key
+
+    @hide_warnings
+    def _compression(self, x, compression_setting):
+        if compression_setting == "None":
+            return x
+        x = x.transpose(0, 1) # (C, L) => (L, C)
+        L = x.shape[0]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            x = self.effectors[compression_setting].apply(x, sample_rate=self.sample_rate)[:L,]
+        x = x.transpose(0, 1) # (L, C) => (C, L)
+        return x
+
+    def get_random_compression_setting(self):
+        if np.random.rand() > self.p:
+            compression_setting = "None"
+        else:
+            settings = list(self.effectors.keys())
+            id = int(np.random.randint(0, len(settings), 1))
+            compression_setting = settings[id]
+        return compression_setting
+
+    def __call__(self, x: torch.Tensor, metadata=None, **kwargs) -> torch.Tensor:
+        if x.ndim != 2:
+            raise ValueError("Error, input audio should be (C, L), but is ", x.shape)
+
+        compression_setting = self.get_random_compression_setting()
+
+        if metadata is not None:
+            metadata["compression_label"] = self.setting_to_label[compression_setting]
+
+        x = self._compression(x, compression_setting)
+        return x
+
+    def batch_apply(self, x: torch.Tensor):
+        batch_size = x.shape[0]
+        settings = [self.get_random_compression_setting() for _ in range(batch_size)]
+        labels = [self.setting_to_label[s] for s in settings]
+        for i, _setting in enumerate(settings):
+            x[i] = self._random_speed(x[i], _setting)
+        return x, labels
+
+
+# %%
+@dataclass
+class RandomAudioCompressionSpeedChanging:
+    def __init__(
+        self,
+        p_compression=0.5,
+        sample_rate=16000,
+        min_speed=0.5,
+        max_speed=2.0,
+        p_speed=1.0,
+        audio_length=48000,
+    ):
+        """post initialization
+
+        check the values of the min_speed and max_speed
+        """
+
+        self.compressor = RandomAudioCompression(
+            p=p_compression, sample_rate=sample_rate
+        )
+        self.speed_changer = RandomSpeed(
+            min_speed=min_speed, max_speed=max_speed, p=p_speed
+        )
+
+        self.audio_length = audio_length
+
+    def __call__(self, x: torch.Tensor, metadata=None, **kwargs) -> torch.Tensor:
+
+        target_speed = self.speed_changer.get_random_speed()
+        
+        need_length = int(self.audio_length * target_speed) + 10
+        waveform_len = x.shape[1]
+        if waveform_len > need_length:
+            start = random.randint(0, waveform_len - need_length)
+            x = x[:, start : start + need_length]
+
+        x = self.compressor(x, metadata=metadata)
+        x = self.speed_changer._random_speed(x, target_speed)
+        if metadata is not None:
+            metadata = self.speed_changer.set_speed_label(target_speed, metadata)
+        return x
+
+    def batch_apply(self, x: torch.Tensor):
+        raise NotImplementedError

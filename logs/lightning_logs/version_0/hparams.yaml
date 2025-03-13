@@ -1,0 +1,19 @@
+args: null
+cfg: !!python/object:argparse.Namespace
+  aug_policy: ss
+  betas:
+  - 1
+  - 0.5
+  - 0.5
+  - 0.5
+  feat_con_loss: true
+  feat_shuffle: true
+  feature_extractor: ResNet
+  one_stem: false
+  pretrain_transformer_path: facebook/wav2vec2-base-960h
+  style_shuffle: true
+  use_adversarial_loss: true
+  use_compression_loss: true
+  use_f0_loss: false
+  use_speed_loss: true
+  vocoder_classes: 8

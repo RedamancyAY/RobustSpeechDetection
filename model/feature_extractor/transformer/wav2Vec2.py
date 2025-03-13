@@ -27,18 +27,16 @@ from transformers import AutoFeatureExtractor, Wav2Vec2Model
 # -
 
 class TransformerBaseLine(nn.Module):
-    def __init__(self, pretrain_feat="extract_features"):
+    def __init__(self, pretrain_feat="extract_features", pretrain_model_path="facebook/wav2vec2-base-960h"):
         super().__init__()
 
         assert pretrain_feat in ["last_hidden_state", "extract_features"]
         self.pretrain_feat = pretrain_feat
         # The channels of used features for the pretrained model is 512 when using
         # the 'extract_features',  but 768 when ["last_hidden_state"] is used.
-        C_features = 512 if pretrain_feat == "extract_features" else 768
 
-        self.pretrain_model = Wav2Vec2Model.from_pretrained(
-            "/usr/local/ay_data/0-model_weights/models--facebook--wav2vec2-base-960h"
-        )
+        self.pretrain_model = Wav2Vec2Model.from_pretrained(pretrain_model_path)
+
 
     def build_final_block(self):
         copied_layers = [deepcopy(self.pretrain_model.encoder.layers[i]) for i in range(6, 12)]
